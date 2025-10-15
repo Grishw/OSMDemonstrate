@@ -1,75 +1,45 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="ru">
 <head>
-  <meta charset="utf-8" />
-  <title>Demo маршрутизации (CH / CRP)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <meta charset="UTF-8" />
+  <title>GeoApp</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
   <style>
-    body, html { height: 100%; margin: 0; }
-    #map { width: 100%; height: 90vh; } /* карта занимает ~90% высоты */
-    #controls {
-      padding: 6px;
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      background: rgba(255,255,255,0.95);
-    }
-    input[type=text]{ width: 220px; padding:6px; }
-    select{ padding:6px; }
-    button{ padding:6px 10px; }
+    #map { width: 100%; height: 100vh; }
   </style>
 </head>
 <body>
   <div id="controls">
+    <select id="tagSelect">
+      <option value="">Все линии</option>
+      <option value="highway">Дороги (highway)</option>
+      <option value="waterway">Реки/каналы (waterway)</option>
+      <option value="railway">Ж/д (railway)</option>
+      <option value="building">Здания (building)</option>
+    </select>
     Start: <input id="start" placeholder="lat, lon" />
     End: <input id="end" placeholder="lat, lon" />
-    Algorithm:
-    <select id="algo">
-      <option value="ch">Contraction Hierarchies (CH)</option>
-      <option value="crp">Customizable RP (CRP)</option>
-    </select>
     <button id="routeBtn">Построить маршрут</button>
     <span id="status"></span>
   </div>
-
+  
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const map = L.map('map').setView([55.75, 37.6], 10);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    const map = L.map("map").setView([55.75, 37.61], 10);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
     }).addTo(map);
 
     let startMarker = null;
-    let endMarker = null;
-    let routeLayer = null;
+    let endMarker = null; 
 
-    // --- Загружаем регионы и центрируем карту ---
-    fetch("/regions").then(r => r.json()).then(data => {
-        const regionLayer = L.geoJSON(data, {
-            style: {color: "red", weight: 2, fill: false}
-        }).addTo(map);
-
-        if (data.features.length > 0) {
-            // используем первый регион для начального позиционирования
-            const bounds = regionLayer.getBounds();
-            map.fitBounds(bounds, {padding: [20, 20]});
-        }
-    });
-
-    fetch("/shortcuts").then(r => r.json()).then(data => {
-      L.geoJSON(data, {
-          style: feature => ({
-              color: feature.properties.algo === "ch" ? "blue" : "green",
-              weight: 2,
-              opacity: 0.5
-          }),
-          interactive: false // линии не кликабельны
-      }).addTo(map);
-    }); 
-
+    let layerGroup = L.geoJSON().addTo(map);
     function setField(id, latlng) {
       document.getElementById(id).value = latlng.lat.toFixed(6)+', '+latlng.lng.toFixed(6);
     }
@@ -98,42 +68,71 @@
       }
     });
 
-    document.getElementById('routeBtn').onclick = async function(){
+    function requestRoute() {
       const s = document.getElementById('start').value.trim();
       const t = document.getElementById('end').value.trim();
-      const algo = document.getElementById('algo').value;
-      if (!s || !t){ alert('Укажите start и end'); return; }
+
       const parse = (str) => {
         const parts = str.split(',').map(x=>parseFloat(x.trim()));
         return [parts[0], parts[1]];
       }
       const start = parse(s);
       const end = parse(t);
-      document.getElementById('status').innerText = '...запрос к серверу';
-      try {
-        const resp = await fetch('/route', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ start: start, end: end, algo: algo })
-        });
-        if (!resp.ok) {
-          const err = await resp.json();
-          alert('Ошибка: '+(err.error||resp.statusText));
-          document.getElementById('status').innerText = '';
-          return;
-        }
-        const geo = await resp.json();
-        if (routeLayer) map.removeLayer(routeLayer);
-        routeLayer = L.geoJSON(geo, {
-          style: { color: algo === 'ch' ? 'blue' : 'green', weight: 5 }
-        }).addTo(map);
-        map.fitBounds(routeLayer.getBounds(), {padding:[20,20]});
-        document.getElementById('status').innerText = 'Маршрут построен ('+algo+')';
-      } catch (e) {
-        alert('Ошибка сети: '+e);
-        document.getElementById('status').innerText = '';
-      }
+
+        const body = {
+            start: { start },
+            end: { end }
+        };
+
+        fetch('/api/route', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        })
+            .then(res => res.json())
+            .then(data => {
+                 if (data.status === 'ok' && data.geometry) {
+                    var geojson = JSON.parse(data.geometry);
+                    if (routeLayer) { map.removeLayer(routeLayer); }
+                    routeLayer = L.geoJSON(geojson, {color: 'red', weight: 4}).addTo(map);
+                    map.fitBounds(routeLayer.getBounds());
+                } else {
+                    alert(data.message || "Маршрут не найден");
+                }
+            })
+            .catch(err => console.error(err));
     }
+    document.getElementById('routeBtn').addEventListener("click", requestRoute);;
+
+    function loadWays() {
+      layerGroup.clearLayers();
+
+      const bounds = map.getBounds();
+      var zoom = map.getZoom();
+      const bbox = [
+        bounds.getWest(),
+        bounds.getSouth(),
+        bounds.getEast(),
+        bounds.getNorth()
+      ].join(",");
+
+      const tag = document.getElementById("tagSelect").value;
+      let url = `/api/ways?bbox=${bbox}&zoom=${zoom}`;
+      if (tag) {
+        url += `&tag=${tag}`;
+      }
+
+      fetch(url)
+        .then(r => r.json())
+        .then(data => {
+          layerGroup.addData(data);
+        });
+    }
+
+    map.on("moveend", loadWays);
+    document.getElementById("tagSelect").addEventListener("change", loadWays);
+
+    loadWays();
   </script>
 </body>
 </html>

@@ -1,7 +1,5 @@
 Flask==2.3.2
-networkx==3.2
-numpy==1.26
-pyproj==3.6.0
-pyosmium>=3.6.0
-igraph>=0.11.9
-osmium>=4.1.1
+SQLAlchemy
+psycopg2-binary
+geoalchemy2
+geojson

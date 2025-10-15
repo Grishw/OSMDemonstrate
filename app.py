@@ -1,186 +1,165 @@
-from flask import Flask, render_template, request, jsonify
-import networkx as nx, numpy as np, pickle, os
-
-CACHE_DIR = "data/cache"
+from flask import Flask, jsonify, render_template, request
+from db import SessionLocal
+from models.models import Way
+from sqlalchemy import text
 
 app = Flask(__name__)
-_graph=None; _ch_data=None; _crp_data=None
 
-# ----------------- Load Cache -----------------
-def load_cache():
-    dat = np.load(os.path.join(CACHE_DIR, "volga/graph.npz"), allow_pickle=True)
-    nodes, edges = dat["nodes"], dat["edges"]
-    print(f"Loaded graph: {len(nodes)} nodes, {len(edges)} edges")
-
-    G = nx.DiGraph()
-    for n, lat, lon in nodes:
-        G.add_node(int(n), lat=float(lat), lon=float(lon))
-    for u, v, w in edges:
-        weight = 0
-        try:
-            weight = float(w)
-        except ValueError:
-            weight = 1.0
-            #print(f"[Warning] пропущено ребро {u}-{v} с некорректным весом: {w}")
-        G.add_edge(int(u), int(v), weight=weight)
-
-    with open(os.path.join(CACHE_DIR, "ch.pkl"), "rb") as f:
-        ch = pickle.load(f)
-    with open(os.path.join(CACHE_DIR, "crp.pkl"), "rb") as f:
-        crp = pickle.load(f)
-
-    # проверим, есть ли граф внутри CH/CRP, иначе добавим G
-    if "G" not in ch: ch["G"] = G
-    if "G" not in crp: crp["G"] = G
-
-    return G, ch, crp
-
-# ----------------- Queries -----------------
-def snap_point(G, pt):
-    lat, lon = pt
-    best, bestd = None, float("inf")
-    for n,d in G.nodes(data=True):
-        if "lat" not in d or "lon" not in d: continue
-        nd = (lat-d["lat"])**2 + (lon-d["lon"])**2
-        if nd < bestd:
-            bestd, best = nd, n
-    return best
-
-def ch_query(ch_data, source, target):
-    rank_list = ch_data["rank"]
-    Gch = ch_data["G"]
-    rank = {n: r for n, r in enumerate(rank_list)}
-
-    Gup = nx.DiGraph()
-    for u, v, data in Gch.edges(data=True):
-        if rank.get(u,0) <= rank.get(v,0):
-            Gup.add_edge(u,v,weight=data["weight"])
-
-    s_node = snap_point(Gch, source)
-    t_node = snap_point(Gch, target)
-    if s_node is None or t_node is None: return None
-
-    try:
-        path = nx.shortest_path(Gup, s_node, t_node, weight="weight")
-        return [(Gch.nodes[n]["lat"], Gch.nodes[n]["lon"]) for n in path]
-    except:
-        return None
-
-def crp_query(crp_data, source, target):
-    G = crp_data["G"]
-    s_node = snap_point(G, source)
-    t_node = snap_point(G, target)
-    if s_node is None or t_node is None: return None
-    try:
-        path = nx.shortest_path(G, s_node, t_node, weight="weight")
-        return [(G.nodes[n]["lat"], G.nodes[n]["lon"]) for n in path]
-    except:
-        return None
-
-# ----------------- Bounding Box -----------------
-def get_region_bounds(graph):
-    lats = [d["lat"] for _,d in graph.nodes(data=True) if "lat" in d]
-    lons = [d["lon"] for _,d in graph.nodes(data=True) if "lon" in d]
-    if not lats or not lons: return []
-
-    min_lat, max_lat = min(lats), max(lats)
-    min_lon, max_lon = min(lons), max(lons)
-    return [{
-        "type": "Feature",
-        "geometry": {
-            "type": "Polygon",
-            "coordinates": [[
-                [min_lon, min_lat],
-                [min_lon, max_lat],
-                [max_lon, max_lat],
-                [max_lon, min_lat],
-                [min_lon, min_lat]
-            ]]
-        },
-        "properties": {"color": "red"}
-    }]
-
-# ----------------- Flask Endpoints -----------------
 @app.route("/")
-def index(): return render_template("index.html")
+def index():
+    return render_template("index.html")
 
-@app.route("/regions")
-def regions():
-    global _graph,_ch_data,_crp_data
-    if _graph is None:
-        _graph,_ch_data,_crp_data = load_cache()
-        print("Cache loaded.")
-    features = get_region_bounds(_graph)
-    return jsonify({"type":"FeatureCollection","features":features})
 
-@app.route("/route",methods=["POST"])
-def route():
-    global _graph,_ch_data,_crp_data
-    if _graph is None:
-        _graph,_ch_data,_crp_data = load_cache()
-        print("Cache loaded.")
+@app.route('/api/ways', methods=['GET'])
+def get_ways():
+    session = SessionLocal()
+    try:
+        bbox_param = request.args.get("bbox")
+        tag_param = request.args.get("tag")  # например: highway, waterway, railway
+        zoom = int(request.args.get("zoom", 12))  # Получаем масштаб карты, дефолт - 12
+        lim = 2000
 
-    data = request.get_json()
-    start, end, algo = data.get("start"), data.get("end"), data.get("algo","ch")
-    if not start or not end: return jsonify({"error":"start/end required"}),400
+        base_query = """
+            SELECT 
+                id,
+                ST_AsGeoJSON(linestring)::json AS geometry,
+                tags
+            FROM ways
+        """
 
-    s = (float(start[0]), float(start[1]))
-    t = (float(end[0]), float(end[1]))
+        conditions = []
+        params = {}
 
-    coords = None
-    if algo=="ch":
+        if tag_param:
+            conditions.append("tags LIKE :tag")
+            params["tag"] = f"\"{tag_param}\""
+
+        if zoom <= 13:
+            conditions.append("(tags->'highway') IN ('motorway', 'trunk', 'primary', 'secondary')")
+            lim = 4000
+        elif zoom <= 10:
+            conditions.append("(tags->'highway') IN ('motorway', 'trunk', 'primary')")
+            lim = 5000 # увеличиваем лимит для более точной выборки
+        if zoom <= 9:
+            conditions.append("(tags->'highway') IN ('trunk')")
+            lim = 10000 # увеличиваем лимит для более точной выборки
         
-        coords = ch_query(_ch_data, s, t)
-    else:
-        coords = crp_query(_crp_data, s, t)
-    if not coords: return jsonify({"error":"route not found"}),404
+        if bbox_param:
+            try:
+                min_lon, min_lat, max_lon, max_lat = map(float, bbox_param.split(","))
+                conditions.append("""
+                    ST_Intersects(
+                        linestring,
+                        ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+                    )
+                """)
+                params.update({
+                    "min_lon": min_lon,
+                    "min_lat": min_lat,
+                    "max_lon": max_lon,
+                    "max_lat": max_lat
+                })
+            except:
+                pass 
 
-    line = {"type":"Feature",
-            "geometry":{"type":"LineString","coordinates":[[lon,lat] for lat,lon in coords]},
-            "properties":{"algo":algo}}
-    return jsonify(line)
+        if conditions:
+            base_query += " WHERE " + " AND ".join(conditions)
 
-@app.route("/shortcuts")
-def shortcuts():
-    """Возвращает все шорткаты CH и CRP для визуализации на карте."""
-    global _graph, _ch_data, _crp_data
-    if _graph is None:
-        _graph, _ch_data, _crp_data = load_cache()
+        base_query += f" LIMIT {lim}"  
+        result = session.execute(text(base_query), params)
 
-    features = []
-
-    # --- CH Shortcuts ---
-    Gch = _ch_data["G"]
-    rank_list = _ch_data["rank"]
-    rank = {n:r for n,r in enumerate(rank_list)}
-
-    for u,v,data in Gch.edges(data=True):
-        if rank.get(u,0) <= rank.get(v,0) and data.get("weight") is not None:
+        features = []
+        for row in result.mappings():
             features.append({
-                "type":"Feature",
-                "geometry":{"type":"LineString",
-                            "coordinates":[
-                                [Gch.nodes[u]["lon"], Gch.nodes[u]["lat"]],
-                                [Gch.nodes[v]["lon"], Gch.nodes[v]["lat"]]
-                            ]},
-                "properties":{"algo":"ch"}
+                "type": "Feature",
+                "geometry": row["geometry"],
+                "properties": {
+                    "id": row["id"],
+                    "tags": row["tags"]
+                }
             })
 
-    # --- CRP Shortcuts ---
-    Gcrp = _crp_data["G"]
-    for u,v,data in Gcrp.edges(data=True):
-        if data.get("weight") is not None:
-            features.append({
-                "type":"Feature",
-                "geometry":{"type":"LineString",
-                            "coordinates":[
-                                [Gcrp.nodes[u]["lon"], Gcrp.nodes[u]["lat"]],
-                                [Gcrp.nodes[v]["lon"], Gcrp.nodes[v]["lat"]]
-                            ]},
-                "properties":{"algo":"crp"}
-            })
+        return jsonify({
+            "type": "FeatureCollection",
+            "features": features
+        })
+    finally:
+        session.close()
 
-    return jsonify({"type":"FeatureCollection","features":features})
+@app.route("/api/route", methods=["POST"])
+def get_route():
+    data = request.get_json()
+    start = data.get("start")
+    end = data.get("end")
+    print(start)
 
-if __name__=="__main__":
-    app.run(debug=True, port=5000)
+    
+    if not start or not end:
+        return jsonify({
+            "status": "error",
+            "message": "start and end required"
+        }), 400
+
+    start_lat, start_lon = start
+    end_lat, end_lon = end
+
+    with SessionLocal() as conn:
+         # 1 Находим ближайшие вершины
+        start_vertex = conn.execute(text("""
+            SELECT id
+            FROM ways_vertices_pgr
+            ORDER BY geom <-> ST_SetSRID(ST_Point(:lon, :lat), 4326)
+            LIMIT 1
+        """), {"lat": start_lat, "lon": start_lon}).scalar()
+
+        end_vertex = conn.execute(text("""
+            SELECT id
+            FROM ways_vertices_pgr
+            ORDER BY geom <-> ST_SetSRID(ST_Point(:lon, :lat), 4326)
+            LIMIT 1
+        """), {"lat": end_lat, "lon": end_lon}).scalar()
+
+        if not start_vertex or not end_vertex:
+            return jsonify({
+                "status": "error",
+                "message": "could not find nearest vertices"
+            }), 400
+
+        # 2 Запрос маршрута через pgr_astar
+        route_rows = conn.execute(text("""
+            SELECT seq, node, edge, cost
+            FROM pgr_astar(
+                'SELECT id, source, target, cost, ST_X(ST_StartPoint(linestring)) AS x1,
+                        ST_Y(ST_StartPoint(linestring)) AS y1,
+                        ST_X(ST_EndPoint(linestring)) AS x2,
+                        ST_Y(ST_EndPoint(linestring)) AS y2
+                 FROM ways',
+                :start_v, :end_v,
+                directed := false
+            )
+            WHERE edge <> -1;
+        """), {"start_v": start_vertex, "end_v": end_vertex}).fetchall()
+
+        if not route_rows:
+            return jsonify({
+                "status": "error",
+                "message": "no route found"
+            }), 404
+
+        edges = [row.edge for row in route_rows]
+
+        # 3 Собираем geometry маршрута
+        geom = conn.execute(text("""
+            SELECT ST_AsGeoJSON(ST_LineMerge(ST_Collect(linestring)))
+            FROM ways
+            WHERE id = ANY(:edges)
+        """), {"edges": edges}).scalar()
+
+    return jsonify({
+        "status": "ok",
+        "geometry": geom,
+        "message": None
+    })
+
+if __name__ == "__main__":
+    app.run(debug=True)

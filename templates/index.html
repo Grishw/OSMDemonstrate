@@ -73,35 +73,62 @@
       const t = document.getElementById('end').value.trim();
 
       const parse = (str) => {
-        const parts = str.split(',').map(x=>parseFloat(x.trim()));
+        const parts = str.split(',').map(x => parseFloat(x.trim()));
+        if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) {
+          alert("Введите координаты в формате: долгота, широта");
+          throw new Error("Invalid coordinates");
+        }
         return [parts[0], parts[1]];
-      }
+      };
+
       const start = parse(s);
       const end = parse(t);
 
-        const body = {
-            start: { start },
-            end: { end }
-        };
+      const body = { start, end };
 
-        fetch('/api/route', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
+      fetch('/api/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+        .then(res => res.json())
+        .then(data => {
+          console.log("Ответ сервера:", data);
+
+          if (data.status === 'ok' && data.route) {
+            // Удаляем предыдущий маршрут
+            if (window.routeLayer) {
+              map.removeLayer(window.routeLayer);
+            }
+
+             // Создаем отдельную панель для маршрута с высоким z-index
+            if (!map.getPane('routePane')) {
+                map.createPane('routePane');
+                map.getPane('routePane').style.zIndex = 650; // больше, чем у стандартных слоёв
+            }
+
+            // Добавляем новый маршрут
+            window.routeLayer = L.geoJSON(data.route, {
+                color: 'red',       // насыщенный цвет
+                weight: 8,          // толщина линии
+                opacity: 0.9,
+                pane: 'routePane',  // используем созданную панель
+                lineJoin: 'round'
+            }).addTo(map);
+
+            // Масштабируем карту по маршруту
+            map.fitBounds(window.routeLayer.getBounds());
+
+          } else {
+            alert(data.message || "Маршрут не найден");
+          }
         })
-            .then(res => res.json())
-            .then(data => {
-                 if (data.status === 'ok' && data.geometry) {
-                    var geojson = JSON.parse(data.geometry);
-                    if (routeLayer) { map.removeLayer(routeLayer); }
-                    routeLayer = L.geoJSON(geojson, {color: 'red', weight: 4}).addTo(map);
-                    map.fitBounds(routeLayer.getBounds());
-                } else {
-                    alert(data.message || "Маршрут не найден");
-                }
-            })
-            .catch(err => console.error(err));
+        .catch(err => {
+          console.error("Ошибка при запросе маршрута:", err);
+          alert("Ошибка при запросе маршрута");
+        });
     }
+
     document.getElementById('routeBtn').addEventListener("click", requestRoute);;
 
     function loadWays() {

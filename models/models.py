@@ -4,13 +4,13 @@ from geoalchemy2 import Geometry
 
 Base = declarative_base()
 
-class Way(Base):
+class Ways(Base):
     __tablename__ = "ways"   
     id = Column(Integer, primary_key=True)
     tags = Column(Text)  
     linestring = Column(Geometry('LINESTRING', srid=4326))
 
-class Node(Base):
+class Nodes(Base):
     __tablename__ = "nodes"
     id = Column(Integer, primary_key=True)
     tags = Column(Text)

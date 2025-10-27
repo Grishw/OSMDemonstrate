@@ -1,9 +1,14 @@
+# folder
 __pycache__/
 data/
+
+# some fiels
 __init__.py
 temp.txt
+todo.txt
 databaseinfo.properties
 db_settings.py
+.sql
 
 # Environments
 .env

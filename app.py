@@ -140,26 +140,25 @@ def get_route():
             WHERE edge <> -1;
         """), {"start_v": start_vertex, "end_v": end_vertex}).fetchall()
 
-        if not route_rows:
+            if not route_rows:
+                return jsonify({"status": "error", "message": "No route found"}), 404
+
+            # Формируем геометрию маршрута из ребер
+            edges = []
+            for row in route_rows:
+                edge_row = conn.query(Ways.linestring).filter(Ways.id == row.edge).one_or_none()
+                if edge_row is not None:
+                    edges.append(to_shape(edge_row.linestring))
+
+            from shapely.ops import linemerge
+            merged_geometry = linemerge(edges)
+
+            # Возвращаем JSON с результатами
             return jsonify({
-                "status": "error",
-                "message": "no route found"
-            }), 404
-
-        edges = [row.edge for row in route_rows]
-
-        # 3 Собираем geometry маршрута
-        geom = conn.execute(text("""
-            SELECT ST_AsGeoJSON(ST_LineMerge(ST_Collect(linestring)))
-            FROM ways
-            WHERE id = ANY(:edges)
-        """), {"edges": edges}).scalar()
-
-    return jsonify({
-        "status": "ok",
-        "geometry": geom,
-        "message": None
-    })
+                "status": "ok",
+                "geometry": merged_geometry.wkt,
+                "message": None
+            })
 
 if __name__ == "__main__":
     app.run(debug=True)

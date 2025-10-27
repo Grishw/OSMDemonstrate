@@ -13,17 +13,11 @@
 </head>
 <body>
   <div id="controls">
-    <select id="tagSelect">
-      <option value="">Все линии</option>
-      <option value="highway">Дороги (highway)</option>
-      <option value="waterway">Реки/каналы (waterway)</option>
-      <option value="railway">Ж/д (railway)</option>
-      <option value="building">Здания (building)</option>
-    </select>
-    Start: <input id="start" placeholder="lat, lon" />
-    End: <input id="end" placeholder="lat, lon" />
-    <button id="routeBtn">Построить маршрут</button>
+    <button id="createConnectionBtn">Создать связь</button>
     <span id="status"></span>
+    <select id="areaSelect">
+      <!-- Опции будут добавлены динамически -->
+    </select>
   </div>
   
   <div id="map"></div>
@@ -36,130 +30,107 @@
       maxZoom: 19,
     }).addTo(map);
 
-    let startMarker = null;
-    let endMarker = null; 
-
     let layerGroup = L.geoJSON().addTo(map);
-    function setField(id, latlng) {
-      document.getElementById(id).value = latlng.lat.toFixed(6)+', '+latlng.lng.toFixed(6);
-    }
 
-    map.on('click', function(e){
-      // левый клик — если нет start, ставим start; если есть start и нет end — ставим end; если есть оба — заменяем nearest
-      if (!startMarker) {
-        startMarker = L.marker(e.latlng, {draggable:true}).addTo(map).bindPopup('Start').openPopup();
-        setField('start', e.latlng);
-        startMarker.on('dragend', ev=> setField('start', ev.target.getLatLng()));
-      } else if (!endMarker) {
-        endMarker = L.marker(e.latlng, {draggable:true}).addTo(map).bindPopup('End').openPopup();
-        setField('end', e.latlng);
-        endMarker.on('dragend', ev=> setField('end', ev.target.getLatLng()));
-      } else {
-        // если оба есть — по клику определим ближайший и заменим
-        const d1 = map.distance(e.latlng, startMarker.getLatLng());
-        const d2 = map.distance(e.latlng, endMarker.getLatLng());
-        if (d1 < d2) {
-          startMarker.setLatLng(e.latlng);
-          setField('start', e.latlng);
-        } else {
-          endMarker.setLatLng(e.latlng);
-          setField('end', e.latlng);
-        }
-      }
-    });
-
-    function requestRoute() {
-      const s = document.getElementById('start').value.trim();
-      const t = document.getElementById('end').value.trim();
-
-      const parse = (str) => {
-        const parts = str.split(',').map(x => parseFloat(x.trim()));
-        if (parts.length !== 2 || isNaN(parts[0]) || isNaN(parts[1])) {
-          alert("Введите координаты в формате: долгота, широта");
-          throw new Error("Invalid coordinates");
-        }
-        return [parts[0], parts[1]];
-      };
-
-      const start = parse(s);
-      const end = parse(t);
-
-      const body = { start, end };
-
-      fetch('/api/route', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      })
-        .then(res => res.json())
-        .then(data => {
-          console.log("Ответ сервера:", data);
-
-          if (data.status === 'ok' && data.route) {
-            // Удаляем предыдущий маршрут
-            if (window.routeLayer) {
-              map.removeLayer(window.routeLayer);
-            }
-
-             // Создаем отдельную панель для маршрута с высоким z-index
-            if (!map.getPane('routePane')) {
-                map.createPane('routePane');
-                map.getPane('routePane').style.zIndex = 650; // больше, чем у стандартных слоёв
-            }
-
-            // Добавляем новый маршрут
-            window.routeLayer = L.geoJSON(data.route, {
-                color: 'red',       // насыщенный цвет
-                weight: 8,          // толщина линии
-                opacity: 0.9,
-                pane: 'routePane',  // используем созданную панель
-                lineJoin: 'round'
-            }).addTo(map);
-
-            // Масштабируем карту по маршруту
-            map.fitBounds(window.routeLayer.getBounds());
-
-          } else {
-            alert(data.message || "Маршрут не найден");
-          }
-        })
-        .catch(err => {
-          console.error("Ошибка при запросе маршрута:", err);
-          alert("Ошибка при запросе маршрута");
-        });
-    }
-
-    document.getElementById('routeBtn').addEventListener("click", requestRoute);;
-
-    function loadWays() {
-      layerGroup.clearLayers();
-
-      const bounds = map.getBounds();
-      var zoom = map.getZoom();
-      const bbox = [
-        bounds.getWest(),
-        bounds.getSouth(),
-        bounds.getEast(),
-        bounds.getNorth()
-      ].join(",");
-
-      const tag = document.getElementById("tagSelect").value;
-      let url = `/api/ways?bbox=${bbox}&zoom=${zoom}`;
-      if (tag) {
-        url += `&tag=${tag}`;
-      }
-
-      fetch(url)
+    function loadComponents() {
+      fetch('/api/components')
         .then(r => r.json())
         .then(data => {
-          layerGroup.addData(data);
+          data.forEach(component => {
+            const nodes = component.nodes;
+            const firstNode = nodes[0];
+            const lastNode = nodes[nodes.length - 1];
+
+            const marker1 = L.marker(firstNode).addTo(map);
+            const marker2 = L.marker(lastNode).addTo(map);
+
+            marker1.bindPopup(`Node ${firstNode}`).openPopup();
+            marker2.bindPopup(`Node ${lastNode}`).openPopup();
+
+            // Добавляем линию между узлами с уникальным цветом для каждого компонента
+            const color = getRandomColor();
+            L.polyline([firstNode, lastNode], { color: color }).addTo(map);
+          });
         });
     }
 
-    map.on("moveend", loadWays);
-    document.getElementById("tagSelect").addEventListener("change", loadWays);
+    function getRandomColor() {
+      const letters = '0123456789ABCDEF';
+      let color = '#';
+      for (let i = 0; i < 6; i++) {
+        color += letters[Math.floor(Math.random() * 16)];
+      }
+      return color;
+    }
 
-    loadWays();
+    document.getElementById('createConnectionBtn').addEventListener("click", createConnection);
+
+    function createConnection() {
+      const node1 = prompt("Введите ID первого узла:");
+      const node2 = prompt("Введите ID второго узла:");
+
+      if (node1 && node2) {
+        fetch('/api/create_connection', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ node1, node2 })
+        })
+        .then(r => r.json())
+        .then(data => {
+          alert(data.message);
+        });
+      }
+    }
+
+    // Добавляем выбор центральной области
+    document.getElementById('areaSelect').addEventListener("change", function() {
+      const selectedArea = this.value;
+      // Обновляем карту на основе выбранной области
+      updateMap(selectedArea);
+    });
+
+    function updateMap(selectedArea) {
+      // Очистка существующих слоев
+      layerGroup.clearLayers();
+
+      // Получение данных о компонентах для выбранной области
+      fetch(`/api/components?area=${selectedArea}`)
+        .then(r => r.json())
+        .then(data => {
+          data.forEach(component => {
+            const nodes = component.nodes;
+            const firstNode = nodes[0];
+            const lastNode = nodes[nodes.length - 1];
+
+            const marker1 = L.marker(firstNode).addTo(map);
+            const marker2 = L.marker(lastNode).addTo(map);
+
+            marker1.bindPopup(`Node ${firstNode}`).openPopup();
+            marker2.bindPopup(`Node ${lastNode}`).openPopup();
+
+            // Добавляем линию между узлами с уникальным цветом для каждого компонента
+            const color = getRandomColor();
+            L.polyline([firstNode, lastNode], { color: color }).addTo(map);
+          });
+        });
+    }
+
+    // Инициализация выбора области
+    fetch('/api/areas')
+      .then(r => r.json())
+      .then(data => {
+        const select = document.getElementById('areaSelect');
+        data.forEach(area => {
+          const option = document.createElement('option');
+          option.value = area.id;
+          option.text = `Area ${area.id}`;
+          select.add(option);
+        });
+      });
+
+    loadComponents();
   </script>
 </body>
 </html>

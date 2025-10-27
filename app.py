@@ -10,175 +10,99 @@ app = Flask(__name__)
 def index():
     return render_template("index.html")
 
+# Маршрут для получения данных о компонентах
+@app.route('/api/components', methods=['GET'])
+def get_components():
+    area = request.args.get('area')
 
-@app.route('/api/ways', methods=['GET'])
-def get_ways():
     session = SessionLocal()
-    try:
-        bbox_param = request.args.get("bbox")
-        tag_param = request.args.get("tag")  # например: highway, waterway, railway
-        zoom = int(request.args.get("zoom", 12))  # Получаем масштаб карты, дефолт - 12
-        lim = 2000
 
-        base_query = """
-            SELECT 
-                id,
-                ST_AsGeoJSON(linestring)::json AS geometry,
-                tags
-            FROM ways
-        """
+    # SQL-запрос для получения данных о компонентах
+    query = """
+        SELECT fix_id, comp_id, nodes
+        FROM way_box_component
+    """
 
-        conditions = []
-        params = {}
+    if area:
+        query += " WHERE fix_id = :area"
+        result = session.execute(query, {"area": area})
+    else:
+        result = session.execute(query)
 
-        if tag_param:
-            conditions.append("tags @> hstore(:tag)")
-            params["tag"] = f"{tag_param}"
-
-        if zoom <= 13:
-            conditions.append("(tags->'highway') IN ('motorway', 'trunk', 'primary', 'secondary')")
-            lim = 4000
-        elif zoom <= 10:
-            conditions.append("(tags->'highway') IN ('motorway', 'trunk', 'primary')")
-            lim = 5000 # увеличиваем лимит для более точной выборки
-        if zoom <= 9:
-            conditions.append("(tags->'highway') IN ('trunk')")
-            lim = 10000 # увеличиваем лимит для более точной выборки
-        
-        if bbox_param:
-            try:
-                min_lon, min_lat, max_lon, max_lat = map(float, bbox_param.split(","))
-                conditions.append("""
-                    ST_Intersects(
-                        linestring,
-                        ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
-                    )
-                """)
-                params.update({
-                    "min_lon": min_lon,
-                    "min_lat": min_lat,
-                    "max_lon": max_lon,
-                    "max_lat": max_lat
-                })
-            except:
-                pass 
-
-        if conditions:
-            base_query += " WHERE " + " AND ".join(conditions)
-
-        base_query += f" LIMIT {lim}"  
-        result = session.execute(text(base_query), params)
-
-        features = []
-        for row in result.mappings():
-            features.append({
-                "type": "Feature",
-                "geometry": row["geometry"],
-                "properties": {
-                    "id": row["id"],
-                    "tags": row["tags"]
-                }
-            })
-
-        return jsonify({
-            "type": "FeatureCollection",
-            "features": features
-        })
-    finally:
-        session.close()
-
-@app.route("/api/route", methods=["POST"])
-def get_route():
-    data = request.get_json()
-    start = data.get("start")
-    end = data.get("end")
-    print(start, "   ", end)
-
-    if not start or not end:
-        return jsonify({"status": "error", "message": "start and end points are required"}), 400
-
-    start_lat, start_lon= start
-    end_lat, end_lon = end
-    print("s ", start_lon, ",",start_lat)
-    print("e ",end_lon, ",",end_lat)
-
-    with SessionLocal() as conn:
-         # 1 Находим ближайшие вершины
-        get_point_sqltext = text("""
-        WITH node_str AS (
-            SELECT id
-            FROM nodes
-            ORDER BY geom <-> ST_SetSRID(ST_Point(:lon, :lat), 4326)
-            LIMIT 1
-        ),
-        str AS (
-            SELECT way_id
-            FROM way_nodes, node_str
-            WHERE node_id = node_str.id
-        )
-        SELECT source
-        FROM ways AS w
-        JOIN str ON w.id = str.way_id;
-        """)
-        start_vertex = conn.execute(get_point_sqltext, {"lat": start_lat, "lon": start_lon}).scalar()
-
-        end_vertex = conn.execute(get_point_sqltext, {"lat": end_lat, "lon": end_lon}).scalar()
-
-        if not start_vertex or not end_vertex:
-            return jsonify({
-                "status": "error",
-                "message": "could not find nearest vertices"
-            }), 400
-        print(start_vertex,"  ", end_vertex)
-
-
-        # Используем pgr_dijkstra для поиска маршрута
-        route_rows = conn.execute(text("""
-        SELECT seq, node, edge, rout.cost, ST_AsGeoJSON(ways.linestring)::json AS geometry 
-        FROM pgr_dijkstra(
-            'SELECT id, source, target, cost, reverse_cost
-            FROM ways', -- запрос к графу дорог
-            :start_v, -- начало пути
-            :end_v, -- конец пути
-            directed := false
-        ) AS rout
-        LEFT JOIN ways
-        ON rout.edge = ways.id
-        ORDER BY seq
-        """), {"start_v": start_vertex, "end_v": end_vertex}).fetchall()
-
-        #print(route_rows)
-        if not route_rows:
-            return jsonify({"status": "error", "message": "No route found"}), 404
-
-        # Формируем геометрию маршрута из ребер
-        
-        features = [
-            {
-                "type": "Feature",
-                "geometry": row.geometry,
-                "properties": {
-                    "seq": row.seq,
-                    "node": row.node,
-                    "edge": row.edge,
-                    "cost": row.cost
-                }
-            }
-            for row in route_rows if row.geometry
-        ]
-
-        feature_collection = {
-            "type": "FeatureCollection",
-            "features": features
-        }
-
-        return jsonify({
-            "status": "ok",
-            "start_vertex": start_vertex,
-            "end_vertex": end_vertex,
-            "route": feature_collection
+    components = []
+    for row in result:
+        components.append({
+            "fix_id": row[0],
+            "comp_id": row[1],
+            "nodes": row[2]
         })
 
+    session.close()
 
-if __name__ == "__main__":
+    return jsonify(components)
+
+# Маршрут для получения данных об областях
+@app.route('/api/areas', methods=['GET'])
+def get_areas():
+    session = SessionLocal()
+
+    # SQL-запрос для получения данных об областях
+    query = """
+        SELECT id, x1, y1, x2, y2
+        FROM road_to_fix
+    """
+
+    result = session.execute(query)
+
+    areas = []
+    for row in result:
+        areas.append({
+            "id": row[0],
+            "x1": row[1],
+            "y1": row[2],
+            "x2": row[3],
+            "y2": row[4]
+        })
+
+    session.close()
+
+    return jsonify(areas)
+
+# Маршрут для создания новой связи
+@app.route('/api/create_connection', methods=['POST'])
+def create_connection():
+    data = request.json
+    node1 = data['node1']
+    node2 = data['node2']
+
+    session = SessionLocal()
+
+    # SQL-запрос для создания новой связи
+    query = """
+        INSERT INTO ways (tags, nodes, linestring, source, target, cost, reverse_cost)
+        VALUES (:tags, :nodes, :linestring, :source, :target, :cost, :reverse_cost)
+        RETURNING id
+    """
+
+    # Создание геометрии линии
+    linestring = f"ST_SetSRID(ST_MakeLine((SELECT geom FROM nodes WHERE node_id = {node1}), (SELECT geom FROM nodes WHERE node_id = {node2})), 4326)"
+
+    result = session.execute(query, {
+        "tags": '{"highway"=>"new_connection"}',
+        "nodes": [node1, node2],
+        "linestring": linestring,
+        "source": node1,
+        "target": node2,
+        "cost": 1.0,
+        "reverse_cost": 1.0
+    })
+
+    new_way_id = result.fetchone()[0]
+
+    session.commit()
+    session.close()
+
+    return jsonify({"message": "Connection created successfully", "way_id": new_way_id}), 201
+
+if __name__ == '__main__':
     app.run(debug=True)

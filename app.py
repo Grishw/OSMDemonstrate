@@ -25,9 +25,9 @@ def get_components():
 
     if area:
         query += " WHERE fix_id = :area"
-        result = session.execute(query, {"area": area})
+        result = session.execute(text(query), {"area": area})
     else:
-        result = session.execute(query)
+        result = session.execute(text(query))
 
     components = []
     for row in result:
@@ -47,10 +47,10 @@ def get_areas():
     session = SessionLocal()
 
     # SQL-запрос для получения данных об областях
-    query = """
-        SELECT id, x1, y1, x2, y2
+    query = text("""
+        SELECT fix_id, x1, y1, x2, y2
         FROM road_to_fix
-    """
+    """)
 
     result = session.execute(query)
 
@@ -87,7 +87,7 @@ def create_connection():
     # Создание геометрии линии
     linestring = f"ST_SetSRID(ST_MakeLine((SELECT geom FROM nodes WHERE node_id = {node1}), (SELECT geom FROM nodes WHERE node_id = {node2})), 4326)"
 
-    result = session.execute(query, {
+    result = session.execute(text(query), {
         "tags": '{"highway"=>"new_connection"}',
         "nodes": [node1, node2],
         "linestring": linestring,

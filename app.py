@@ -32,7 +32,7 @@ def get_ways():
         params = {}
 
         if tag_param:
-            conditions.append("tags @> hstore(:tag)")
+            conditions.append("tags -> :tag IS NOT NULL")
             params["tag"] = f"{tag_param}"
 
         if zoom <= 13:

@@ -12,7 +12,7 @@
     
     <div class="toggle-group">
       <label class="toggle">
-        <input type="checkbox" id="showRoads" checked>
+        <input type="checkbox" id="showRoads">
         <span class="toggle-slider"></span>
         Показывать дороги
       </label>
@@ -26,7 +26,17 @@
       <label>Конец:</label>
       <input id="end" placeholder="широта, долгота" />
     </div>
+
+    <div class="input-group">
+      <label>Алгоритм:</label>
+      <select id="algorithm">
+        <option value="dijkstra">Дейкстра (точный)</option>
+        <option value="astar">A* (быстрый)</option>
+      </select>
+    </div>
+
     <button id="routeBtn">Построить маршрут</button>
+    <!-- Кнопка сравнения добавится автоматически через JavaScript -->
     <div id="status"></div>
   </div>
   
@@ -43,5 +53,6 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="{{ url_for('static', filename='js/map.js') }}"></script>
   <script src="{{ url_for('static', filename='js/routing.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/comparison.js') }}"></script>
 </body>
 </html>

@@ -128,7 +128,7 @@ function toggleRoadsVisibility() {
   if (showRoads) {
     loadWays();
   } else {
-    roadsLayer.clearLayers();
+    map.removeLayer(window.roadsLayer);
   }
 }
 

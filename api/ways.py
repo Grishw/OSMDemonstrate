@@ -15,7 +15,7 @@ def get_ways():
             SELECT 
                 id,
                 ST_AsGeoJSON(geom)::json AS geometry
-            FROM routing_graph_fixed
+            FROM routing_graph_fixed_1
         """
 
         conditions = []

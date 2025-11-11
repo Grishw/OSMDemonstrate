@@ -20,9 +20,22 @@ function parseCoordinates(str) {
 
 // Отображение информации о маршруте
 function showRouteInfo(summary) {
+  const algorithmName = summary.algorithm === 'A*' ? 'A* (эвристический)' : 
+                       summary.algorithm === 'Dijkstra' ? 'Дейкстра (точный)' : 
+                       'Неизвестный алгоритм';
+  
+  const totalDistance = summary.total_distance ? `${summary.total_distance.toFixed(2)} м` : 'не указана';
+  const executionTime = summary.execution_time ? `${summary.execution_time.toFixed(3)} сек` : 'не указано';
+  
   document.getElementById('routeSummary').innerHTML = 
-    `Сегментов: ${summary.total_segments}<br>` +
-    `Общее время: ${summary.total_cost.toFixed(1)} сек.`;
+    `<strong>Информация о маршруте:</strong><br>
+     Алгоритм: ${algorithmName}<br>
+     Сегментов: ${summary.total_segments}<br>
+     Длина пути: ${totalDistance}<br>
+     Общее время: ${summary.total_cost ? summary.total_cost.toFixed(1) + ' сек' : 'не указано'}<br>
+     Время выполнения: ${executionTime}`;
+  
+  // Показываем панель информации
   document.getElementById('routeInfo').style.display = 'block';
 }
 
@@ -80,14 +93,14 @@ function createPointMarker(feature, latlng) {
 // Всплывающее окно для сегментов маршрута
 function bindRoutePopup(feature, layer) {
   if (feature.properties && feature.properties.name) {
+    const algorithmText = feature.properties.algorithm ? `<br>Алгоритм: ${feature.properties.algorithm}` : '';
     layer.bindPopup(`
       <b>${feature.properties.name || 'Без названия'}</b><br>
       Тип: ${feature.properties.highway || 'road'}<br>
-      Стоимость: ${feature.properties.cost ? feature.properties.cost.toFixed(2) + ' сек.' : ''}
+      Стоимость: ${feature.properties.cost ? feature.properties.cost.toFixed(2) + ' сек.' : ''}${algorithmText}
     `);
   }
 }
-
 // Функция очистки точек маршрута
 function clearRoadPoints() {
   if (window.roadStartMarker) {
@@ -136,6 +149,7 @@ function displayRoute(routeData) {
 function requestRoute() {
   const startInput = document.getElementById('start').value.trim();
   const endInput = document.getElementById('end').value.trim();
+  const algorithm = document.getElementById('algorithm').value;
 
   try {
     const start = parseCoordinates(startInput);
@@ -145,16 +159,29 @@ function requestRoute() {
 
     document.getElementById('status').textContent = 'Построение маршрута...';
 
-    fetch('/api/route', {
+    // Выбираем endpoint в зависимости от алгоритма
+    const endpoint = algorithm === 'astar' ? '/api/route/astar' : '/api/route';
+
+    // Замеряем время выполнения на клиенте
+    const startTime = performance.now();
+
+    fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody)
     })
       .then(response => response.json())
       .then(data => {
+        const endTime = performance.now();
+        const clientExecutionTime = (endTime - startTime) / 1000; // в секундах
+        
         document.getElementById('status').textContent = '';
 
         if (data.status === 'ok' && data.route) {
+          // Добавляем время выполнения в данные summary
+          if (data.summary) {
+            data.summary.execution_time = clientExecutionTime;
+          }
           displayRoute(data.route);
           if (data.summary) {
             showRouteInfo(data.summary);
@@ -175,6 +202,20 @@ function requestRoute() {
   }
 }
 
+// Функция для расчета общей длины маршрута
+function calculateTotalDistance(routeData) {
+  let totalDistance = 0;
+  if (routeData && routeData.features) {
+    routeData.features.forEach(feature => {
+      if (feature.geometry && feature.geometry.type === 'LineString' && feature.properties && feature.properties.cost) {
+        // Предполагаем, что cost пропорционален расстоянию
+        totalDistance += feature.properties.cost * 1000; // примерное преобразование
+      }
+    });
+  }
+  return totalDistance;
+}
+
 // Инициализация обработчиков событий
 document.addEventListener('DOMContentLoaded', function() {
   // Инициализация глобальных переменных
@@ -186,6 +227,8 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('closeInfo').addEventListener("click", function() {
     document.getElementById('routeInfo').style.display = 'none';
   });
+
+  initComparison();
 
   // Обработчик для очистки маршрута при изменении карты
   map.on('layeradd', function(e) {

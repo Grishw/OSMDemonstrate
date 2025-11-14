@@ -6,9 +6,7 @@ data/
 __init__.py
 temp.txt
 todo.txt
-databaseinfo.properties
-db_settings.py
-.sql
+
 
 # Environments
 .env

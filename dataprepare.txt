@@ -1,0 +1,28 @@
+clear raw data command:
+./osmosis 
+    --read-pbf file=../../../../data/raw/central-fed-district-250929.osm.pbf 
+    --tag-filter accept-ways highway=* 
+    --tag-filter reject-relations 
+    --used-node 
+    --write-xml file=../../../../data/clear/central-fed-district.osm.xml 
+
+select in coordinate box:
+./osmosis 
+    --read-xml file=../../../../data/clear/central-fed-district.osm.xml 
+    --bounding-box top=55.906115 left=37.368622 bottom=51.686180 right=55.244751 
+    --write-xml file=../../../../data/clear/selected/central.osm.xml 
+
+select way type data from cleared:
+.\osmosis 
+    --read-pbf file=../../../../data/clear/small-clear.osm.pbf 
+    --tf accept-ways highway=motorway,motorway_link,trunk,trunk_link,primary,primary_link,secondary,secondary_link,tertiary,tertiary_link,unclassified,residential,service,living_street,road 
+    --tf reject-ways highway=footway,cycleway,path,steps,pedestrian,construction,proposed,bridleway 
+    --tf reject-ways motor_vehicle=no 
+    --used-node 
+    --write-pbf file=../../../../data/clear/max_clear/small-max-clear_ways.osm.pbf
+
+import to db:
+./osmosis 
+    --read-pbf file=../../../../data/clear/max_clear/small-max-clear_ways.osm.pbf 
+    --write-pgsql 
+    authFile=../../../../demonstrate/databaseinfo.properties
